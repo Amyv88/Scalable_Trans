@@ -2,25 +2,15 @@
 #1st task: Calculate time for training model on mark3o translation task
 #check the time for same using cupy
 # use hpc from Uni, lap taking time#
-
-#import trace
-#from recurse import recurse
 """todo: make this code run on nhr server and see the time, try using belu score as used in original "attention is all  you need ",
 todo: show prof. koestler  the results and discuss further, should cuda be done or cupy sufficent, cuda will take more time :::ß
 todo: make the comparison between numpy and pytorch , how does performance gets affected by hyperparameters,
 todo: how fast it run , and how fast shoudl it run.
 todo: see matrix multiplication"""
-#import cProfile
-#from line_profiler import LineProfiler
-
-#import nvtx
-
-
-import time 
-
-
-
+import cProfile
+import pstats
 import sys, os
+import time
 from pathlib import Path
 sys.path[0] = str(Path(sys.path[0]).parent)
 
@@ -33,7 +23,7 @@ try:
 except:
     is_cupy_available = False
     print('CuPy is not available. Switching to NumPy.')
-    
+
 import pickle as pkl
 from tqdm import tqdm
 from transformer.modules import Encoder
@@ -46,7 +36,7 @@ import matplotlib.pyplot as plt
 
 
 DATA_TYPE = np.float32
-BATCH_SIZE =128 
+BATCH_SIZE = 64
 
 PAD_TOKEN = '<pad>'
 SOS_TOKEN = '<sos>'
@@ -65,7 +55,7 @@ indexes = (PAD_INDEX, SOS_INDEX, EOS_INDEX, UNK_INDEX)
 data_preparator = DataPreparator(tokens, indexes)
 
 train_data, test_data, val_data = data_preparator.prepare_data(
-                    path = '/home/hpc/iwia/iwia050h/numpy-transformer-master/dataset/',
+                    path = 'D:/Thesis/numpy-transformer-master/dataset',
                     batch_size = BATCH_SIZE, 
                     min_freq = 2)
 
@@ -133,6 +123,7 @@ class Seq2Seq():
         return subsequent_mask
 
     def forward(self, src, trg, training):
+        start= time.time()
         src, trg = src.astype(DATA_TYPE), trg.astype(DATA_TYPE)
         #src: (batch_size, source_seq_len)
         #tgt: (batch_size, target_seq_len)
@@ -148,10 +139,10 @@ class Seq2Seq():
         out, attention = self.decoder.forward(trg, trg_mask, enc_src, src_mask, training)
         # output: (batch_size, target_seq_len, vocab_size)
         # attn: (batch_size, heads_num, target_seq_len, source_seq_len)
-        #print(f"Size of src: {src.nbytes / (1024 * 1024):.2f} MB")
         return out, attention
-        
-    #@monitor(sampling_rate= 0.2 , format="hdf5")
+        end=time.time()
+
+
     def backward(self, error):
         error = self.decoder.backward(error)
         error = self.encoder.backward(self.decoder.encoder_error)
@@ -190,8 +181,8 @@ class Seq2Seq():
                 tqdm_range.set_description(
                         f"training | avg loss: {epoch_loss:.7f} | avg perplexity: {np.exp(epoch_loss):.7f} | epoch {epoch + 1}/{epochs}"
                 )
-               
-
+                print(
+                    f"src batch size in bytes: {sys.getsizeof(source_batch)}, target batch size in bytes: {sys.getsizeof(target_batch)}")
         return epoch_loss
 
     def _evaluate(self, source, target):
@@ -253,18 +244,15 @@ class Seq2Seq():
                 
         return train_loss_history, val_loss_history
 
-
-
-
-    def predict(self, sentence, vocabs, max_length = 50):
+    def predict(self, sentence, vocabs, max_length=50):
 
         src_inds = [vocabs[0][word] if word in vocabs[0] else UNK_INDEX for word in sentence]
         src_inds = [SOS_INDEX] + src_inds + [EOS_INDEX]
-        
-        src = np.asarray(src_inds).reshape(1, -1)
-        src_mask =  self.get_pad_mask(src)
 
-        enc_src = self.encoder.forward(src, src_mask, training = False)
+        src = np.asarray(src_inds).reshape(1, -1)
+        src_mask = self.get_pad_mask(src)
+
+        enc_src = self.encoder.forward(src, src_mask, training=False)
 
         trg_inds = [SOS_INDEX]
 
@@ -272,15 +260,15 @@ class Seq2Seq():
             trg = np.asarray(trg_inds).reshape(1, -1)
             trg_mask = self.get_pad_mask(trg) & self.get_sub_mask(trg)
 
-            out, attention = self.decoder.forward(trg, trg_mask, enc_src, src_mask, training = False)
-            
+            out, attention = self.decoder.forward(trg, trg_mask, enc_src, src_mask, training=False)
+
             trg_indx = out.argmax(axis=-1)[:, -1].item()
             trg_inds.append(trg_indx)
 
             if trg_indx == EOS_INDEX or len(trg_inds) >= max_length:
                 break
-        
-        reversed_vocab = dict((v,k) for k,v in vocabs[1].items())
+
+        reversed_vocab = dict((v, k) for k, v in vocabs[1].items())
         decoded_sentence = [reversed_vocab[indx] if indx in reversed_vocab else UNK_TOKEN for indx in trg_inds]
 
         return decoded_sentence[1:], attention[0]
@@ -323,7 +311,7 @@ model.compile(
                 , loss_function = CrossEntropy(ignore_index=PAD_INDEX)
             )
 train_loss_history, val_loss_history = None, None
-train_loss_history, val_loss_history = model.fit(train_data, val_data, epochs = 5, save_every_epochs = 20, save_path = "saved models/seq2seq_model", validation_check = True)# "saved models/seq2seq_model"
+train_loss_history, val_loss_history = model.fit(train_data, val_data, epochs = 1, save_every_epochs = 5, save_path = "saved models/seq2seq_model", validation_check = True)# "saved models/seq2seq_model"
 
 
 
@@ -334,7 +322,6 @@ def plot_loss_history(train_loss_history, val_loss_history):
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend(['train', 'val'], loc='upper left')
-    plt.savefig("tempp.png")
     plt.show()
         
 if train_loss_history is not None and val_loss_history is not None:
@@ -342,7 +329,7 @@ if train_loss_history is not None and val_loss_history is not None:
 
 
 
-_, _, val_data = data_preparator.import_multi30k_dataset(path = '/home/hpc/iwia/iwia050h/numpy-transformer-master/dataset/')
+_, _, val_data = data_preparator.import_multi30k_dataset(path = 'D:/Thesis/numpy-transformer-master/dataset')
 val_data = data_preparator.clear_dataset(val_data)[0]
 sentences_num = 10
 
@@ -355,7 +342,6 @@ for i, example in enumerate(sentences_selection):
     print(f"Input sentence: { ' '.join(example['en'])}")
     print(f"Decoded sentence: {' '.join(model.predict(example['en'], train_data_vocabs)[0])}")
     print(f"Target sentence: {' '.join(example['de'])}")
-
 
 
 
@@ -384,7 +370,7 @@ def plot_attention(sentence, translation, attention, heads_num = 8, rows_num = 2
 
         ax.set_xticklabels(sentence, rotation=90)
         ax.set_yticklabels(translation)
-    
+
 
     plt.show()
 
@@ -396,7 +382,32 @@ print(f"Decoded sentence: {decoded_sentence}")
 
 plot_attention(sentence, decoded_sentence, attention)
 
-#cProfile.run('backward(self, error)')
+print(sys.getsizeof(attention))
 
 
+"""def main():
+    w=predict()
+    pyglet.app.run()"""
+
+"""if __name__== "__main__":
+
+    import cProfile
+    cProfile.run('main()',"output.dat")
+
+    import pstats
+    from pstats import SortKey
+    with open("output_time.txt","w") as f:
+        p =pstats.Stats("output.dat", stream=f)
+        p.sort_stats("time").print_stats()
+    with open("output_calls.txt", "w") as f:
+        p=pstats.Stats("output.dat", stream=f)
+        p.sort_stats("calls").print_stats()"""
+
+"""def main():
+  predict()
+
+
+
+if __name__ == '__main__':
+    cProfile.run('main()')"""
 
